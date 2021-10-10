@@ -2,3 +2,35 @@ baseURL = "https://blog.basilehenry.com/"
 languageCode = "en-us"
 title = "Basile's blog"
 theme = "PaperMod"
+
+enableRobotsTXT = true
+buildDrafts = false
+buildFuture = false
+buildExpired = false
+enableEmoji = true
+googleAnalytics = "G-3M5EJCZPVS"
+
+[minify]
+disableXML = true
+minifyOutput = true
+
+[params]
+  env = "production"
+  author = "Basile Henry"
+
+  ShowReadingTime = true
+  ShowShareButtons = true
+
+  google_fonts = [
+    ["Source Serif Pro", "400, 400i, 600"],
+    ["Source Code Pro", "400, 400i"]
+  ]
+
+  font_body = "Source Serif Pro"
+  font_header = "Source Serif Pro"
+  font_code = "Source Code Pro"
+
+[params.editPost]
+URL = "https://github.com/basile-henry/blog/content"
+Text = "Suggest Changes"
+appendFilePath = true
