@@ -1,0 +1,4 @@
+baseURL = "https://blog.basilehenry.com/"
+languageCode = "en-us"
+title = "Basile's blog"
+theme = "PaperMod"
