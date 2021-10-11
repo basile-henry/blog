@@ -197,7 +197,7 @@ It looks like `pv` uses a different strategy for moving data around. The relevan
 > **splice**() moves data between two file descriptors without copying between kernel address space and user address space.
 
 So that's the trick! We can make the data go from one file to another without copying the data via user space (our program).  
-`pv` since to be moving data with a chunk size of `65536` bytes (even though it is requesting `131072`). This is a bit bigger than our buffer of `8192` bytes, which means that `pv` uses fewer system calls than we do to move the same amount of data as well as not needing to copy it.
+`pv` seems to be moving data with a chunk size of `65536` bytes (even though it is requesting `131072`). This is a bit bigger than our buffer of `8192` bytes, which means that `pv` uses fewer system calls than we do to move the same amount of data as well as not needing to copy it.
 
 The `select` system call looks to be waiting for standard input (file descriptor `0`) to have some input available. This is likely to prevent spamming `splice` system calls when no data is available and no progress can be made anyway. But as far as I can tell, when using `splice` with a pipe on the input, it patiently waits for data to become available.
 
