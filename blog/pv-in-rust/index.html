@@ -1,0 +1,364 @@
+<!doctype html><html lang=en dir=auto>
+<head><meta charset=utf-8>
+<meta http-equiv=x-ua-compatible content="IE=edge">
+<meta name=viewport content="width=device-width,initial-scale=1,shrink-to-fit=no">
+<meta name=robots content="index, follow">
+<title>Small pv clone in under 75 lines of Rust | Basile's blog</title>
+<meta name=keywords content="rust,linux">
+<meta name=description content="Finding out how pv works and writing a small clone in Rust">
+<meta name=author content="Basile Henry">
+<link rel=canonical href=https://blog.basilehenry.com/blog/pv-in-rust/>
+<link crossorigin=anonymous href=/assets/css/stylesheet.min.5e2b4101351c21e906f398ae96901791830f58d430f96f2659dab7eaef7b3cb7.css integrity="sha256-XitBATUcIekG85iulpAXkYMPWNQw+W8mWdq36u97PLc=" rel="preload stylesheet" as=style>
+<script defer crossorigin=anonymous src=/assets/js/highlight.min.7680afc38aa6b15ddf158a4f3780b7b1f7dde7e91d26f073e6229bb7a0793c92.js integrity="sha256-doCvw4qmsV3fFYpPN4C3sffd5+kdJvBz5iKbt6B5PJI=" onload=hljs.initHighlightingOnLoad()></script>
+<link rel=icon href=https://blog.basilehenry.com/favicon.ico>
+<link rel=icon type=image/png sizes=16x16 href=https://blog.basilehenry.com/favicon-16x16.png>
+<link rel=icon type=image/png sizes=32x32 href=https://blog.basilehenry.com/favicon-32x32.png>
+<link rel=apple-touch-icon href=https://blog.basilehenry.com/apple-touch-icon.png>
+<link rel=mask-icon href=https://blog.basilehenry.com/safari-pinned-tab.svg>
+<meta name=theme-color content="#2e2e33">
+<meta name=msapplication-TileColor content="#2e2e33">
+<meta name=generator content="Hugo 0.88.1">
+<noscript>
+<style>#theme-toggle,.top-link{display:none}</style>
+<style>@media(prefers-color-scheme:dark){:root{--theme:rgb(29, 30, 32);--entry:rgb(46, 46, 51);--primary:rgb(218, 218, 219);--secondary:rgb(155, 156, 157);--tertiary:rgb(65, 66, 68);--content:rgb(196, 196, 197);--hljs-bg:rgb(46, 46, 51);--code-bg:rgb(55, 56, 62);--border:rgb(51, 51, 51)}.list{background:var(--theme)}.list:not(.dark)::-webkit-scrollbar-track{background:0 0}.list:not(.dark)::-webkit-scrollbar-thumb{border-color:var(--theme)}}</style>
+</noscript>
+<link href="//fonts.googleapis.com/css?family=Source+Serif+Pro:400,400i,600|Source+Code+Pro:400,400i" rel=stylesheet>
+<style>body{font-family:source serif pro}h1,h2,h3,h4{font-family:source serif pro}code{font-family:source code pro}</style>
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-3M5EJCZPVS"></script>
+<script>var doNotTrack=!1;if(!doNotTrack){window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date),gtag('config','G-3M5EJCZPVS',{anonymize_ip:!1})}</script>
+<meta property="og:title" content="Small pv clone in under 75 lines of Rust">
+<meta property="og:description" content="Finding out how pv works and writing a small clone in Rust">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://blog.basilehenry.com/blog/pv-in-rust/"><meta property="article:section" content="blog">
+<meta property="article:published_time" content="2021-10-10T17:44:31+02:00">
+<meta property="article:modified_time" content="2021-10-10T17:44:31+02:00">
+<meta name=twitter:card content="summary">
+<meta name=twitter:title content="Small pv clone in under 75 lines of Rust">
+<meta name=twitter:description content="Finding out how pv works and writing a small clone in Rust">
+<script type=application/ld+json>{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Blogs","item":"https://blog.basilehenry.com/blog/"},{"@type":"ListItem","position":2,"name":"Small pv clone in under 75 lines of Rust","item":"https://blog.basilehenry.com/blog/pv-in-rust/"}]}</script>
+<script type=application/ld+json>{"@context":"https://schema.org","@type":"BlogPosting","headline":"Small pv clone in under 75 lines of Rust","name":"Small pv clone in under 75 lines of Rust","description":"Finding out how pv works and writing a small clone in Rust","keywords":["rust","linux"],"articleBody":"What is pv? pv, likely for pipe view, is a neat little Linux command that let’s us monitor the amount of data that goes through a pipe.\n❯ pv ~/Pictures/some_picture.jpg  some_picture.jpg 2.90MiB 0:00:00 [ 157MiB/s] [===========================================] 100% ❯ pv ~/Pictures/some_picture.jpg | ssh remote.machine \"cat  some_picture.jpg\" 2.90MiB 0:00:03 [ 788KiB/s] [===========================================] 100% pv moves data from its standard input to its standard output (or in this case from a file) while measuring how much data is moved and how fast.\nIt can sometimes be really fast. A quick test to see how fast it can go is to use the yes command to generate input and then output the data to /dev/null. On my laptop I can get 5-6GiB/s, but this throughput will vary widly from machine to machine, and the bottleneck could be either yes, pv or the way linux is configured on my machine.\n❯ yes | pv  /dev/null 35.4GiB 0:00:06 [5.60GiB/s] [ = ] How does pv work? Copying some input data to the output while keeping information to report seems somewhat straight forward at first, so we will figure out the details as we go. 🤞\nBut what about the report? How can pv output anything to my terminal if its output is being piped to the next command/a file? According to the man page it uses standard error!\nThe report that pv outputs purposefully spans only 1 line. This way, the report can be updated in place by using the carriage return character '\\r' without using a linefeed character '\\n' to go back to the beginning of the line and overwrite what was previously written. Smart! Only downside is that it needs to write enough the second time around to fully overwrite what was previously written.\nA naive implementation Let’s implement pv in Rust for a bit of fun and to learn along the way!\nIn this first iteration we will setup a buffer. We continuously read from standard input into that buffer then write from that buffer to standard output.\n// main.rs use std::io; use std::io::prelude::*; // This buffer size seems optimal on my machine const BUFFER_SIZE: usize = 8 * 1024; fn main() - io::Result() { // Get handles for standard input and standard output  let mut stdin = io::stdin(); let mut stdout = io::stdout(); // Setup a buffer to transfer data from stdin to stdout  let mut buffer = [0; BUFFER_SIZE]; loop { // Read data from the standard input into the buffer  let bytes = stdin.read(\u0026mut buffer)?; if bytes == 0 { // No more data to read, return successfully  return Ok(()); } // Write the data we've just read from the buffer to standard output  //  // Note: we use `write_all` instead of `write` as it could take several  // writes to finish depending on how busy the recipient is  stdout.write_all(\u0026buffer[..bytes])?; } } Let’s try it:\n❯ echo \"Hello\" | cargo run --release --quiet --bin rpv Hello Great! 🎉\nWe have data passing through. Though, it’s a bit useless at the moment 😅\nLet’s add some reporting. For similar functionality to pv we need to keep track of how many bytes have been transferred, as well as the time elapsed since the beginning. From that we can get the average throughput since the start of the program.\nHow often should we report progress? If we do it on every transfer of one buffer we are likely to slow down the transfer as well as making the report unreadable. We will therefore only report once every second.\n// main.rs /* ... */ use std::time::{Duration, Instant}; /* ... */ const REPORT_PERIOD: f64 = 1.0; /* fn main() - ... */ // Keep track of how many bytes are being transferred as we go  let mut bytes_so_far = 0; // Start timer to figure out the elapsed time  let start_time = Instant::now(); let mut next_report_time = start_time; /* loop ... */ // Update what we have transferred so far  bytes_so_far += bytes; // Report if it is time to do so  let now = Instant::now(); if now = next_report_time { next_report_time = now + Duration::from_secs_f64(REPORT_PERIOD); report(bytes_so_far, start_time.elapsed()); } To print the report we will use standard error and the '\\r' trick discussed. To make reporting nicer we will make use of the great byte-unit crate to properly format the byte count and throughput in a human readable way.\nfn report(byte_count: usize, elapsed: Duration) { // Use the byte_unit crate to do all the unit conversions and display logic  use byte_unit::{Byte, ByteUnit}; let adjusted_byte_count = Byte::from_unit(byte_count as f64, ByteUnit::B) .unwrap() .get_appropriate_unit(true); // Get the average throughput since the start  let throughput = byte_count as f64 / elapsed.as_secs_f64(); let adjusted_throughput = Byte::from_unit(throughput, ByteUnit::B) .unwrap() .get_appropriate_unit(true); // Print report to standard error  // We use some padding to make the number of characters outputted stable so  // that the carriage return trick properly overwrites all previous output  eprint!( \"{:10} | {:10}/s | {:10}\\r\", adjusted_byte_count.to_string(), adjusted_throughput.to_string(), // Debug for Duration doesn't pad properly, so format beforehand  format!(\"{:.1?}\", elapsed) ); } So how well does this run?\n❯ yes | cargo run --release --quiet --bin rpv  /dev/null 7.54 GiB | 4.32 GiB/s | 11.0s Not bad for a first iteration. I did have to tweak the buffer size in order to get the best throughput possible on my machine, but we’re getting close to the throughput we saw with pv.\nHow is pv so fast? In order to find out how pv is so fast, we should have a look at what kind of IO it does in its main loop. Then we can compare that to what we are doing.\nstrace is an amazing tool to get exactly this type of information. You run strace command and it prints all of the system calls the command does, which is what IO is: a bunch of system calls to get the Linux kernel to do some work for you.\nIn our case, it is slightly trickier to get this info since pv already makes heavy use of the standard output (and standard error) so it’s not as straight forward to call strace on pv. Fortunately we can use strace by providing it the PID of the program we are interested in.\nSo we start out command in one terminal:\n❯ yes | pv  /dev/null And with a bit of bash magic we call strace on that pv (assuming there’s only one instance of pv running):\n❯ strace -p $(ps aux | grep \"pv$\" | tr -s ' ' | cut -d' ' -f2) strace: Process 176755 attached select(1, [0], [], NULL, {tv_sec=0, tv_usec=90000}) = 1 (in [0], left {tv_sec=0, tv_usec=89999}) splice(0, NULL, 1, NULL, 131072, SPLICE_F_MORE) = 65536 select(1, [0], [], NULL, {tv_sec=0, tv_usec=90000}) = 1 (in [0], left {tv_sec=0, tv_usec=89999}) splice(0, NULL, 1, NULL, 131072, SPLICE_F_MORE) = 65536 select(1, [0], [], NULL, {tv_sec=0, tv_usec=90000}) = 1 (in [0], left {tv_sec=0, tv_usec=89999}) ... If we compare it to our version (rpv):\n❯ strace -p $(ps aux | grep \"rpv$\" | tr -s ' ' | cut -d' ' -f2) strace: Process 183150 attached read(0, \"y\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\n\"..., 8192) = 8192 write(1, \"y\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\n\"..., 8192) = 8192 read(0, \"y\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\n\"..., 8192) = 8192 write(1, \"y\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\n\"..., 8192) = 8192 read(0, \"y\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\ny\\n\"..., 8192) = 8192 ... It looks like pv uses a different strategy for moving data around. The relevant system call it uses is splice, for which the man page tells us:\n splice() moves data between two file descriptors without copying between kernel address space and user address space.\n So that’s the trick! We can make the data go from one file to another without copying the data via user space (our program).\npv since to be moving data with a chunk size of 65536 bytes (even though it is requesting 131072). This is a bit bigger than our buffer of 8192 bytes, which means that pv uses fewer system calls than we do to move the same amount of data as well as not needing to copy it.\nThe select system call looks to be waiting for standard input (file descriptor 0) to have some input available. This is likely to prevent spamming splice system calls when no data is available and no progress can be made anyway. But as far as I can tell, when using splice with a pipe on the input, it patiently waits for data to become available.\nUsing splice ourselves The simplest way for us to call the splice system call is to use the nix crate.\nChanging our code to use nix::fcntl::splice instead of read/write is fairly straight forward:\n// main.rs use nix::fcntl::{splice, SpliceFFlags}; use std::os::unix::io::AsRawFd; /* ... */ const CHUNK_SIZE: usize = 64 * 1024; /* ... */ /* fn main() - ... */ /* loop ... */ // Move data from stdin to stdout in kernel space  let bytes = splice( stdin.as_raw_fd(), None, stdout.as_raw_fd(), None, CHUNK_SIZE, SpliceFFlags::SPLICE_F_MOVE | SpliceFFlags::SPLICE_F_MORE, )?; /* ... */ Let’s run it:\n❯ yes | cargo run --release --quiet --bin rpv  /dev/null 96.28 GiB | 7.41 GiB/s | 13.0s Success! 🎉\nIt even looks a bit faster than pv, maybe because we’ve omitted these select system calls?\n❯ strace -p $(ps aux | grep \"rpv$\" | tr -s ' ' | cut -d' ' -f2) strace: Process 221492 attached splice(0, NULL, 1, NULL, 65536, SPLICE_F_MOVE|SPLICE_F_MORE) = 65536 splice(0, NULL, 1, NULL, 65536, SPLICE_F_MOVE|SPLICE_F_MORE) = 65536 splice(0, NULL, 1, NULL, 65536, SPLICE_F_MOVE|SPLICE_F_MORE) = 65536 splice(0, NULL, 1, NULL, 65536, SPLICE_F_MOVE|SPLICE_F_MORE) = 65536 ... Under 75 lines We did it, we have a basic version of pv in Rust in under 75 lines.\nuse nix::fcntl::{splice, SpliceFFlags}; use std::io; use std::os::unix::io::AsRawFd; use std::time::{Duration, Instant}; const CHUNK_SIZE: usize = 64 * 1024; const REPORT_PERIOD: f64 = 1.0; fn main() - io::Result() { // Get handles for standard input and standard output  let stdin = io::stdin(); let stdout = io::stdout(); // Keep track of how many bytes are being transferred as we go  let mut bytes_so_far = 0; // Start timer to figure out the elapsed time  let start_time = Instant::now(); let mut next_report_time = start_time; loop { // Move data from stdin to stdout in kernel space  let bytes = splice( stdin.as_raw_fd(), None, stdout.as_raw_fd(), None, CHUNK_SIZE, SpliceFFlags::SPLICE_F_MOVE | SpliceFFlags::SPLICE_F_MORE, )?; if bytes == 0 { // No more data to read, return successfully after reporting one  // last time  report(bytes_so_far, start_time.elapsed()); return Ok(()); } // Update what we have transferred so far  bytes_so_far += bytes; // Report if it is time to do so  let now = Instant::now(); if now = next_report_time { next_report_time = now + Duration::from_secs_f64(REPORT_PERIOD); report(bytes_so_far, start_time.elapsed()); } } } fn report(byte_count: usize, elapsed: Duration) { // Use the byte_unit crate to do all the unit conversions and display logic  use byte_unit::{Byte, ByteUnit}; let adjusted_byte_count = Byte::from_unit(byte_count as f64, ByteUnit::B) .unwrap() .get_appropriate_unit(true); // Get the average throughput since the start  let throughput = byte_count as f64 / elapsed.as_secs_f64(); let adjusted_throughput = Byte::from_unit(throughput, ByteUnit::B) .unwrap() .get_appropriate_unit(true); // Print report to standard error  // We use some padding to make the number of characters outputted stable so  // that the carriage return trick properly overwrites all previous output  eprint!( \"{:10} | {:10}/s | {:10}\\r\", adjusted_byte_count.to_string(), adjusted_throughput.to_string(), // Debug for Duration doesn't pad properly, so format beforehand  format!(\"{:.1?}\", elapsed) ); } A more full-fledged clone of pv in Rust would have nicer error messages, for example when standard input is the terminal rather than a pipe. It could possibly also support file inputs. Hide the cursor in the terminal while updating the report. And have a colourful output! 🤩\nI hope you learned something just like I did while writing this, see you around!\n","wordCount":"1940","inLanguage":"en","datePublished":"2021-10-10T17:44:31+02:00","dateModified":"2021-10-10T17:44:31+02:00","author":{"@type":"Person","name":"Basile Henry"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://blog.basilehenry.com/blog/pv-in-rust/"},"publisher":{"@type":"Organization","name":"Basile's blog","logo":{"@type":"ImageObject","url":"https://blog.basilehenry.com/favicon.ico"}}}</script>
+</head>
+<body id=top>
+<script>localStorage.getItem("pref-theme")==="dark"?document.body.classList.add('dark'):localStorage.getItem("pref-theme")==="light"?document.body.classList.remove('dark'):window.matchMedia('(prefers-color-scheme: dark)').matches&&document.body.classList.add('dark')</script>
+<header class=header>
+<nav class=nav>
+<div class=logo>
+<a href=https://blog.basilehenry.com/ accesskey=h title="Basile's blog (Alt + H)">Basile's blog</a>
+<span class=logo-switches>
+<button id=theme-toggle accesskey=t title="(Alt + T)"><svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentcolor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg><svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentcolor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+</button>
+</span>
+</div>
+<ul id=menu>
+</ul>
+</nav>
+</header>
+<main class=main>
+<article class=post-single>
+<header class=post-header>
+<h1 class=post-title>
+Small pv clone in under 75 lines of Rust
+</h1>
+<div class=post-meta>October 10, 2021&nbsp;·&nbsp;10 min&nbsp;·&nbsp;Basile Henry&nbsp;|&nbsp;<a href=https://github.com/basile-henry/blog/content/blog/pv-in-rust.md rel="noopener noreferrer" target=_blank>Suggest Changes</a>
+</div>
+</header>
+<div class=post-content><h2 id=what-is-pv>What is <code>pv</code>?<a hidden class=anchor aria-hidden=true href=#what-is-pv>#</a></h2>
+<p><a href=https://man7.org/linux/man-pages/man1/pv.1.html><code>pv</code></a>, likely for <em>pipe view</em>, is a neat little Linux command that let&rsquo;s us monitor the amount of data that goes through a pipe.</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-shell data-lang=shell>❯ pv ~/Pictures/some_picture.jpg &gt; some_picture.jpg
+2.90MiB 0:00:00 <span style=color:#f92672>[</span> 157MiB/s<span style=color:#f92672>]</span> <span style=color:#f92672>[===========================================</span>&gt;<span style=color:#f92672>]</span> 100%
+
+❯ pv ~/Pictures/some_picture.jpg | ssh remote.machine <span style=color:#e6db74>&#34;cat &gt; some_picture.jpg&#34;</span>
+2.90MiB 0:00:03 <span style=color:#f92672>[</span> 788KiB/s<span style=color:#f92672>]</span> <span style=color:#f92672>[===========================================</span>&gt;<span style=color:#f92672>]</span> 100%
+</code></pre></div><p><code>pv</code> moves data from its standard input to its standard output (or in this case from a file) while measuring how much data is moved and how fast.<br>
+It can sometimes be really fast. A quick test to see how fast it can go is to use the <a href=https://man7.org/linux/man-pages/man1/yes.1.html><code>yes</code></a> command to generate input and then output the data to <code>/dev/null</code>. On my laptop I can get <code>5-6GiB/s</code>, but this throughput will <a href=https://www.reddit.com/r/unix/comments/6gxduc/how_is_gnu_yes_so_fast/>vary widly from machine to machine</a>, and the bottleneck could be either <code>yes</code>, <code>pv</code> or the way linux is configured on my machine.</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-shell data-lang=shell>❯ yes | pv &gt; /dev/null
+35.4GiB 0:00:06 <span style=color:#f92672>[</span>5.60GiB/s<span style=color:#f92672>]</span> <span style=color:#f92672>[</span>      &lt;<span style=color:#f92672>=</span>&gt;                                   <span style=color:#f92672>]</span>
+</code></pre></div><h2 id=how-does-pv-work>How does <code>pv</code> work?<a hidden class=anchor aria-hidden=true href=#how-does-pv-work>#</a></h2>
+<p>Copying some input data to the output while keeping information to report seems somewhat straight forward at first, so we will figure out the details as we go. 🤞<br>
+But what about the report? How can <code>pv</code> output anything to my terminal if its output is being piped to the next command/a file? According to the <a href=https://man7.org/linux/man-pages/man1/pv.1.html>man page</a> it uses standard error!<br>
+The report that <code>pv</code> outputs purposefully spans only 1 line. This way, the report can be updated in place by using the carriage return character <code>'\r'</code> without using a linefeed character <code>'\n'</code> to go back to the beginning of the line and overwrite what was previously written. Smart! Only downside is that it needs to write enough the second time around to fully overwrite what was previously written.</p>
+<h2 id=a-naive-implementation>A naive implementation<a hidden class=anchor aria-hidden=true href=#a-naive-implementation>#</a></h2>
+<p>Let&rsquo;s implement <code>pv</code> in Rust for a bit of fun and to learn along the way!</p>
+<p>In this first iteration we will setup a buffer. We continuously read from standard input into that buffer then write from that buffer to standard output.</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-rust data-lang=rust><span style=color:#75715e>// main.rs
+</span><span style=color:#75715e></span><span style=color:#66d9ef>use</span> std::io;
+<span style=color:#66d9ef>use</span> std::io::prelude::<span style=color:#f92672>*</span>;
+
+<span style=color:#75715e>// This buffer size seems optimal on my machine
+</span><span style=color:#75715e></span><span style=color:#66d9ef>const</span> BUFFER_SIZE: <span style=color:#66d9ef>usize</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>8</span> <span style=color:#f92672>*</span> <span style=color:#ae81ff>1024</span>;
+
+<span style=color:#66d9ef>fn</span> <span style=color:#a6e22e>main</span>() -&gt; <span style=color:#a6e22e>io</span>::Result<span style=color:#f92672>&lt;</span>()<span style=color:#f92672>&gt;</span> {
+    <span style=color:#75715e>// Get handles for standard input and standard output
+</span><span style=color:#75715e></span>    <span style=color:#66d9ef>let</span> <span style=color:#66d9ef>mut</span> stdin <span style=color:#f92672>=</span> io::stdin();
+    <span style=color:#66d9ef>let</span> <span style=color:#66d9ef>mut</span> stdout <span style=color:#f92672>=</span> io::stdout();
+
+    <span style=color:#75715e>// Setup a buffer to transfer data from stdin to stdout
+</span><span style=color:#75715e></span>    <span style=color:#66d9ef>let</span> <span style=color:#66d9ef>mut</span> buffer <span style=color:#f92672>=</span> [<span style=color:#ae81ff>0</span>; BUFFER_SIZE];
+
+    <span style=color:#66d9ef>loop</span> {
+        <span style=color:#75715e>// Read data from the standard input into the buffer
+</span><span style=color:#75715e></span>        <span style=color:#66d9ef>let</span> bytes <span style=color:#f92672>=</span> stdin.read(<span style=color:#f92672>&amp;</span><span style=color:#66d9ef>mut</span> buffer)<span style=color:#f92672>?</span>;
+        <span style=color:#66d9ef>if</span> bytes <span style=color:#f92672>==</span> <span style=color:#ae81ff>0</span> {
+            <span style=color:#75715e>// No more data to read, return successfully
+</span><span style=color:#75715e></span>            <span style=color:#66d9ef>return</span> Ok(());
+        }
+
+        <span style=color:#75715e>// Write the data we&#39;ve just read from the buffer to standard output
+</span><span style=color:#75715e></span>        <span style=color:#75715e>//
+</span><span style=color:#75715e></span>        <span style=color:#75715e>// Note: we use `write_all` instead of `write` as it could take several
+</span><span style=color:#75715e></span>        <span style=color:#75715e>// writes to finish depending on how busy the recipient is
+</span><span style=color:#75715e></span>        stdout.write_all(<span style=color:#f92672>&amp;</span>buffer[..bytes])<span style=color:#f92672>?</span>;
+    }
+}
+</code></pre></div><p>Let&rsquo;s try it:</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-shell data-lang=shell>❯ echo <span style=color:#e6db74>&#34;Hello&#34;</span> | cargo run --release --quiet --bin rpv
+Hello
+</code></pre></div><p>Great! 🎉<br>
+We have data passing through. Though, it&rsquo;s a bit useless at the moment 😅</p>
+<p>Let&rsquo;s add some reporting. For similar functionality to <code>pv</code> we need to keep track of how many bytes have been transferred, as well as the time elapsed since the beginning. From that we can get the average throughput since the start of the program.</p>
+<p>How often should we report progress? If we do it on every transfer of one buffer we are likely to slow down the transfer as well as making the report unreadable. We will therefore only report once every second.</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-rust data-lang=rust><span style=color:#75715e>// main.rs
+</span><span style=color:#75715e></span><span style=color:#75715e>/* ... */</span>
+<span style=color:#66d9ef>use</span> std::time::{Duration, Instant};
+
+<span style=color:#75715e>/* ... */</span>
+<span style=color:#66d9ef>const</span> REPORT_PERIOD: <span style=color:#66d9ef>f64</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>1.0</span>;
+
+<span style=color:#75715e>/* fn main() -&gt; ... */</span>
+    <span style=color:#75715e>// Keep track of how many bytes are being transferred as we go
+</span><span style=color:#75715e></span>    <span style=color:#66d9ef>let</span> <span style=color:#66d9ef>mut</span> bytes_so_far <span style=color:#f92672>=</span> <span style=color:#ae81ff>0</span>;
+
+    <span style=color:#75715e>// Start timer to figure out the elapsed time
+</span><span style=color:#75715e></span>    <span style=color:#66d9ef>let</span> start_time <span style=color:#f92672>=</span> Instant::now();
+    <span style=color:#66d9ef>let</span> <span style=color:#66d9ef>mut</span> next_report_time <span style=color:#f92672>=</span> start_time;
+
+    <span style=color:#75715e>/* loop ... */</span>
+        <span style=color:#75715e>// Update what we have transferred so far
+</span><span style=color:#75715e></span>        bytes_so_far <span style=color:#f92672>+=</span> bytes;
+
+        <span style=color:#75715e>// Report if it is time to do so
+</span><span style=color:#75715e></span>        <span style=color:#66d9ef>let</span> now <span style=color:#f92672>=</span> Instant::now();
+        <span style=color:#66d9ef>if</span> now <span style=color:#f92672>&gt;=</span> next_report_time {
+            next_report_time <span style=color:#f92672>=</span> now <span style=color:#f92672>+</span> Duration::from_secs_f64(REPORT_PERIOD);
+            report(bytes_so_far, start_time.elapsed());
+        }
+</code></pre></div><p>To print the report we will use standard error and the <code>'\r'</code> trick discussed. To make reporting nicer we will make use of the great <a href=https://crates.io/crates/byte-unit><code>byte-unit</code></a> crate to properly format the byte count and throughput in a human readable way.</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-rust data-lang=rust><span style=color:#66d9ef>fn</span> <span style=color:#a6e22e>report</span>(byte_count: <span style=color:#66d9ef>usize</span>, elapsed: <span style=color:#a6e22e>Duration</span>) {
+    <span style=color:#75715e>// Use the byte_unit crate to do all the unit conversions and display logic
+</span><span style=color:#75715e></span>    <span style=color:#66d9ef>use</span> byte_unit::{Byte, ByteUnit};
+
+    <span style=color:#66d9ef>let</span> adjusted_byte_count <span style=color:#f92672>=</span> Byte::from_unit(byte_count <span style=color:#66d9ef>as</span> <span style=color:#66d9ef>f64</span>, ByteUnit::B)
+        .unwrap()
+        .get_appropriate_unit(<span style=color:#66d9ef>true</span>);
+
+    <span style=color:#75715e>// Get the average throughput since the start
+</span><span style=color:#75715e></span>    <span style=color:#66d9ef>let</span> throughput <span style=color:#f92672>=</span> byte_count <span style=color:#66d9ef>as</span> <span style=color:#66d9ef>f64</span> <span style=color:#f92672>/</span> elapsed.as_secs_f64();
+    <span style=color:#66d9ef>let</span> adjusted_throughput <span style=color:#f92672>=</span> Byte::from_unit(throughput, ByteUnit::B)
+        .unwrap()
+        .get_appropriate_unit(<span style=color:#66d9ef>true</span>);
+
+    <span style=color:#75715e>// Print report to standard error
+</span><span style=color:#75715e></span>    <span style=color:#75715e>// We use some padding to make the number of characters outputted stable so
+</span><span style=color:#75715e></span>    <span style=color:#75715e>// that the carriage return trick properly overwrites all previous output
+</span><span style=color:#75715e></span>    eprint<span style=color:#f92672>!</span>(
+        <span style=color:#e6db74>&#34;{:&gt;10} | {:&gt;10}/s | {:&gt;10}\r&#34;</span>,
+        adjusted_byte_count.to_string(),
+        adjusted_throughput.to_string(),
+        <span style=color:#75715e>// Debug for Duration doesn&#39;t pad properly, so format beforehand
+</span><span style=color:#75715e></span>        format<span style=color:#f92672>!</span>(<span style=color:#e6db74>&#34;{:.1?}&#34;</span>, elapsed)
+    );
+}
+</code></pre></div><p>So how well does this run?</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-shell data-lang=shell>❯ yes | cargo run --release --quiet --bin rpv &gt; /dev/null
+  7.54 GiB |   4.32 GiB/s |      11.0s
+</code></pre></div><p>Not bad for a first iteration. I did have to tweak the buffer size in order to get the best throughput possible on my machine, but we&rsquo;re getting close to the throughput we saw with <code>pv</code>.</p>
+<h2 id=how-is-pv-so-fast>How is <code>pv</code> so fast?<a hidden class=anchor aria-hidden=true href=#how-is-pv-so-fast>#</a></h2>
+<p>In order to find out how <code>pv</code> is so fast, we should have a look at what kind of IO it does in its main loop. Then we can compare that to what we are doing.<br>
+<a href=https://man7.org/linux/man-pages/man1/strace.1.html><code>strace</code></a> is an amazing tool to get exactly this type of information. You run <code>strace command</code> and it prints all of the system calls the command does, which is what IO is: a bunch of system calls to get the Linux kernel to do some work for you.</p>
+<p>In our case, it is slightly trickier to get this info since <code>pv</code> already makes heavy use of the standard output (and standard error) so it&rsquo;s not as straight forward to call <code>strace</code> on <code>pv</code>. Fortunately we can use <code>strace</code> by providing it the <code>PID</code> of the program we are interested in.</p>
+<p>So we start out command in one terminal:</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-shell data-lang=shell>❯ yes | pv &gt; /dev/null
+</code></pre></div><p>And with a bit of <code>bash</code> magic we call <code>strace</code> on that <code>pv</code> (assuming there&rsquo;s only one instance of <code>pv</code> running):</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-shell data-lang=shell>❯ strace -p <span style=color:#66d9ef>$(</span>ps aux | grep <span style=color:#e6db74>&#34;pv</span>$<span style=color:#e6db74>&#34;</span> | tr -s <span style=color:#e6db74>&#39; &#39;</span> | cut -d<span style=color:#e6db74>&#39; &#39;</span> -f2<span style=color:#66d9ef>)</span>
+strace: Process <span style=color:#ae81ff>176755</span> attached
+<span style=color:#66d9ef>select</span><span style=color:#f92672>(</span>1, <span style=color:#f92672>[</span>0<span style=color:#f92672>]</span>, <span style=color:#f92672>[]</span>, NULL, <span style=color:#f92672>{</span>tv_sec<span style=color:#f92672>=</span>0, tv_usec<span style=color:#f92672>=</span>90000<span style=color:#f92672>})</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>1</span> <span style=color:#f92672>(</span>in <span style=color:#f92672>[</span>0<span style=color:#f92672>]</span>, left <span style=color:#f92672>{</span>tv_sec<span style=color:#f92672>=</span>0, tv_usec<span style=color:#f92672>=</span>89999<span style=color:#f92672>})</span>
+splice<span style=color:#f92672>(</span>0, NULL, 1, NULL, 131072, SPLICE_F_MORE<span style=color:#f92672>)</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>65536</span>
+<span style=color:#66d9ef>select</span><span style=color:#f92672>(</span>1, <span style=color:#f92672>[</span>0<span style=color:#f92672>]</span>, <span style=color:#f92672>[]</span>, NULL, <span style=color:#f92672>{</span>tv_sec<span style=color:#f92672>=</span>0, tv_usec<span style=color:#f92672>=</span>90000<span style=color:#f92672>})</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>1</span> <span style=color:#f92672>(</span>in <span style=color:#f92672>[</span>0<span style=color:#f92672>]</span>, left <span style=color:#f92672>{</span>tv_sec<span style=color:#f92672>=</span>0, tv_usec<span style=color:#f92672>=</span>89999<span style=color:#f92672>})</span>
+splice<span style=color:#f92672>(</span>0, NULL, 1, NULL, 131072, SPLICE_F_MORE<span style=color:#f92672>)</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>65536</span>
+<span style=color:#66d9ef>select</span><span style=color:#f92672>(</span>1, <span style=color:#f92672>[</span>0<span style=color:#f92672>]</span>, <span style=color:#f92672>[]</span>, NULL, <span style=color:#f92672>{</span>tv_sec<span style=color:#f92672>=</span>0, tv_usec<span style=color:#f92672>=</span>90000<span style=color:#f92672>})</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>1</span> <span style=color:#f92672>(</span>in <span style=color:#f92672>[</span>0<span style=color:#f92672>]</span>, left <span style=color:#f92672>{</span>tv_sec<span style=color:#f92672>=</span>0, tv_usec<span style=color:#f92672>=</span>89999<span style=color:#f92672>})</span>
+...
+&lt;detached ...&gt;
+</code></pre></div><p>If we compare it to our version (<code>rpv</code>):</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-shell data-lang=shell>❯ strace -p <span style=color:#66d9ef>$(</span>ps aux | grep <span style=color:#e6db74>&#34;rpv</span>$<span style=color:#e6db74>&#34;</span> | tr -s <span style=color:#e6db74>&#39; &#39;</span> | cut -d<span style=color:#e6db74>&#39; &#39;</span> -f2<span style=color:#66d9ef>)</span>
+strace: Process <span style=color:#ae81ff>183150</span> attached
+read<span style=color:#f92672>(</span>0, <span style=color:#e6db74>&#34;y\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\n&#34;</span>..., 8192<span style=color:#f92672>)</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>8192</span>
+write<span style=color:#f92672>(</span>1, <span style=color:#e6db74>&#34;y\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\n&#34;</span>..., 8192<span style=color:#f92672>)</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>8192</span>
+read<span style=color:#f92672>(</span>0, <span style=color:#e6db74>&#34;y\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\n&#34;</span>..., 8192<span style=color:#f92672>)</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>8192</span>
+write<span style=color:#f92672>(</span>1, <span style=color:#e6db74>&#34;y\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\n&#34;</span>..., 8192<span style=color:#f92672>)</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>8192</span>
+read<span style=color:#f92672>(</span>0, <span style=color:#e6db74>&#34;y\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\n&#34;</span>..., 8192<span style=color:#f92672>)</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>8192</span>
+...
+&lt;detached ...&gt;
+</code></pre></div><p>It looks like <code>pv</code> uses a different strategy for moving data around. The relevant system call it uses is <code>splice</code>, for which the <a href=https://man7.org/linux/man-pages/man2/splice.2.html><code>man page</code></a> tells us:</p>
+<blockquote>
+<p><strong>splice</strong>() moves data between two file descriptors without copying between kernel address space and user address space.</p>
+</blockquote>
+<p>So that&rsquo;s the trick! We can make the data go from one file to another without copying the data via user space (our program).<br>
+<code>pv</code> since to be moving data with a chunk size of <code>65536</code> bytes (even though it is requesting <code>131072</code>). This is a bit bigger than our buffer of <code>8192</code> bytes, which means that <code>pv</code> uses fewer system calls than we do to move the same amount of data as well as not needing to copy it.</p>
+<p>The <code>select</code> system call looks to be waiting for standard input (file descriptor <code>0</code>) to have some input available. This is likely to prevent spamming <code>splice</code> system calls when no data is available and no progress can be made anyway. But as far as I can tell, when using <code>splice</code> with a pipe on the input, it patiently waits for data to become available.</p>
+<h2 id=using-splice-ourselves>Using <code>splice</code> ourselves<a hidden class=anchor aria-hidden=true href=#using-splice-ourselves>#</a></h2>
+<p>The simplest way for us to call the <code>splice</code> system call is to use the <a href=https://crates.io/crates/nix><code>nix</code></a> crate.<br>
+Changing our code to use <a href=https://docs.rs/nix/0.23.0/nix/fcntl/fn.splice.html><code>nix::fcntl::splice</code></a> instead of <code>read</code>/<code>write</code> is fairly straight forward:</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-rust data-lang=rust><span style=color:#75715e>// main.rs
+</span><span style=color:#75715e></span><span style=color:#66d9ef>use</span> nix::fcntl::{splice, SpliceFFlags};
+<span style=color:#66d9ef>use</span> std::os::unix::io::AsRawFd;
+<span style=color:#75715e>/* ... */</span>
+
+<span style=color:#66d9ef>const</span> CHUNK_SIZE: <span style=color:#66d9ef>usize</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>64</span> <span style=color:#f92672>*</span> <span style=color:#ae81ff>1024</span>;
+<span style=color:#75715e>/* ... */</span>
+
+<span style=color:#75715e>/* fn main() -&gt; ... */</span>
+
+    <span style=color:#75715e>/* loop ... */</span>
+        <span style=color:#75715e>// Move data from stdin to stdout in kernel space
+</span><span style=color:#75715e></span>        <span style=color:#66d9ef>let</span> bytes <span style=color:#f92672>=</span> splice(
+            stdin.as_raw_fd(),
+            None,
+            stdout.as_raw_fd(),
+            None,
+            CHUNK_SIZE,
+            SpliceFFlags::SPLICE_F_MOVE <span style=color:#f92672>|</span> SpliceFFlags::SPLICE_F_MORE,
+        )<span style=color:#f92672>?</span>;
+
+        <span style=color:#75715e>/* ... */</span>
+</code></pre></div><p>Let&rsquo;s run it:</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-shell data-lang=shell>❯ yes | cargo run --release --quiet --bin rpv &gt; /dev/null
+ 96.28 GiB |   7.41 GiB/s |      13.0s
+</code></pre></div><p>Success! 🎉<br>
+It even looks a bit faster than <code>pv</code>, maybe because we&rsquo;ve omitted these <code>select</code> system calls?</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-shell data-lang=shell>❯ strace -p <span style=color:#66d9ef>$(</span>ps aux | grep <span style=color:#e6db74>&#34;rpv</span>$<span style=color:#e6db74>&#34;</span> | tr -s <span style=color:#e6db74>&#39; &#39;</span> | cut -d<span style=color:#e6db74>&#39; &#39;</span> -f2<span style=color:#66d9ef>)</span>
+strace: Process <span style=color:#ae81ff>221492</span> attached
+splice<span style=color:#f92672>(</span>0, NULL, 1, NULL, 65536, SPLICE_F_MOVE|SPLICE_F_MORE<span style=color:#f92672>)</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>65536</span>
+splice<span style=color:#f92672>(</span>0, NULL, 1, NULL, 65536, SPLICE_F_MOVE|SPLICE_F_MORE<span style=color:#f92672>)</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>65536</span>
+splice<span style=color:#f92672>(</span>0, NULL, 1, NULL, 65536, SPLICE_F_MOVE|SPLICE_F_MORE<span style=color:#f92672>)</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>65536</span>
+splice<span style=color:#f92672>(</span>0, NULL, 1, NULL, 65536, SPLICE_F_MOVE|SPLICE_F_MORE<span style=color:#f92672>)</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>65536</span>
+...
+&lt;detached ...&gt;
+</code></pre></div><h2 id=under-75-lines>Under 75 lines<a hidden class=anchor aria-hidden=true href=#under-75-lines>#</a></h2>
+<p>We did it, we have a basic version of <code>pv</code> in Rust in under 75 lines.</p>
+<div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-rust data-lang=rust><span style=color:#66d9ef>use</span> nix::fcntl::{splice, SpliceFFlags};
+<span style=color:#66d9ef>use</span> std::io;
+<span style=color:#66d9ef>use</span> std::os::unix::io::AsRawFd;
+<span style=color:#66d9ef>use</span> std::time::{Duration, Instant};
+
+<span style=color:#66d9ef>const</span> CHUNK_SIZE: <span style=color:#66d9ef>usize</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>64</span> <span style=color:#f92672>*</span> <span style=color:#ae81ff>1024</span>;
+<span style=color:#66d9ef>const</span> REPORT_PERIOD: <span style=color:#66d9ef>f64</span> <span style=color:#f92672>=</span> <span style=color:#ae81ff>1.0</span>;
+
+<span style=color:#66d9ef>fn</span> <span style=color:#a6e22e>main</span>() -&gt; <span style=color:#a6e22e>io</span>::Result<span style=color:#f92672>&lt;</span>()<span style=color:#f92672>&gt;</span> {
+    <span style=color:#75715e>// Get handles for standard input and standard output
+</span><span style=color:#75715e></span>    <span style=color:#66d9ef>let</span> stdin <span style=color:#f92672>=</span> io::stdin();
+    <span style=color:#66d9ef>let</span> stdout <span style=color:#f92672>=</span> io::stdout();
+
+    <span style=color:#75715e>// Keep track of how many bytes are being transferred as we go
+</span><span style=color:#75715e></span>    <span style=color:#66d9ef>let</span> <span style=color:#66d9ef>mut</span> bytes_so_far <span style=color:#f92672>=</span> <span style=color:#ae81ff>0</span>;
+
+    <span style=color:#75715e>// Start timer to figure out the elapsed time
+</span><span style=color:#75715e></span>    <span style=color:#66d9ef>let</span> start_time <span style=color:#f92672>=</span> Instant::now();
+    <span style=color:#66d9ef>let</span> <span style=color:#66d9ef>mut</span> next_report_time <span style=color:#f92672>=</span> start_time;
+
+    <span style=color:#66d9ef>loop</span> {
+        <span style=color:#75715e>// Move data from stdin to stdout in kernel space
+</span><span style=color:#75715e></span>        <span style=color:#66d9ef>let</span> bytes <span style=color:#f92672>=</span> splice(
+            stdin.as_raw_fd(),
+            None,
+            stdout.as_raw_fd(),
+            None,
+            CHUNK_SIZE,
+            SpliceFFlags::SPLICE_F_MOVE <span style=color:#f92672>|</span> SpliceFFlags::SPLICE_F_MORE,
+        )<span style=color:#f92672>?</span>;
+        <span style=color:#66d9ef>if</span> bytes <span style=color:#f92672>==</span> <span style=color:#ae81ff>0</span> {
+            <span style=color:#75715e>// No more data to read, return successfully after reporting one
+</span><span style=color:#75715e></span>            <span style=color:#75715e>// last time
+</span><span style=color:#75715e></span>            report(bytes_so_far, start_time.elapsed());
+            <span style=color:#66d9ef>return</span> Ok(());
+        }
+
+        <span style=color:#75715e>// Update what we have transferred so far
+</span><span style=color:#75715e></span>        bytes_so_far <span style=color:#f92672>+=</span> bytes;
+
+        <span style=color:#75715e>// Report if it is time to do so
+</span><span style=color:#75715e></span>        <span style=color:#66d9ef>let</span> now <span style=color:#f92672>=</span> Instant::now();
+        <span style=color:#66d9ef>if</span> now <span style=color:#f92672>&gt;=</span> next_report_time {
+            next_report_time <span style=color:#f92672>=</span> now <span style=color:#f92672>+</span> Duration::from_secs_f64(REPORT_PERIOD);
+            report(bytes_so_far, start_time.elapsed());
+        }
+    }
+}
+
+<span style=color:#66d9ef>fn</span> <span style=color:#a6e22e>report</span>(byte_count: <span style=color:#66d9ef>usize</span>, elapsed: <span style=color:#a6e22e>Duration</span>) {
+    <span style=color:#75715e>// Use the byte_unit crate to do all the unit conversions and display logic
+</span><span style=color:#75715e></span>    <span style=color:#66d9ef>use</span> byte_unit::{Byte, ByteUnit};
+
+    <span style=color:#66d9ef>let</span> adjusted_byte_count <span style=color:#f92672>=</span> Byte::from_unit(byte_count <span style=color:#66d9ef>as</span> <span style=color:#66d9ef>f64</span>, ByteUnit::B)
+        .unwrap()
+        .get_appropriate_unit(<span style=color:#66d9ef>true</span>);
+
+    <span style=color:#75715e>// Get the average throughput since the start
+</span><span style=color:#75715e></span>    <span style=color:#66d9ef>let</span> throughput <span style=color:#f92672>=</span> byte_count <span style=color:#66d9ef>as</span> <span style=color:#66d9ef>f64</span> <span style=color:#f92672>/</span> elapsed.as_secs_f64();
+    <span style=color:#66d9ef>let</span> adjusted_throughput <span style=color:#f92672>=</span> Byte::from_unit(throughput, ByteUnit::B)
+        .unwrap()
+        .get_appropriate_unit(<span style=color:#66d9ef>true</span>);
+
+    <span style=color:#75715e>// Print report to standard error
+</span><span style=color:#75715e></span>    <span style=color:#75715e>// We use some padding to make the number of characters outputted stable so
+</span><span style=color:#75715e></span>    <span style=color:#75715e>// that the carriage return trick properly overwrites all previous output
+</span><span style=color:#75715e></span>    eprint<span style=color:#f92672>!</span>(
+        <span style=color:#e6db74>&#34;{:&gt;10} | {:&gt;10}/s | {:&gt;10}\r&#34;</span>,
+        adjusted_byte_count.to_string(),
+        adjusted_throughput.to_string(),
+        <span style=color:#75715e>// Debug for Duration doesn&#39;t pad properly, so format beforehand
+</span><span style=color:#75715e></span>        format<span style=color:#f92672>!</span>(<span style=color:#e6db74>&#34;{:.1?}&#34;</span>, elapsed)
+    );
+}
+</code></pre></div><p>A more full-fledged clone of <code>pv</code> in Rust would have nicer error messages, for
+example when standard input is the terminal rather than a pipe. It could possibly
+also support file inputs. Hide the cursor in the terminal while updating the
+report. And have a colourful output! 🤩</p>
+<p>I hope you learned something just like I did while writing this, see you around!</p>
+</div>
+<footer class=post-footer>
+<ul class=post-tags>
+<li><a href=https://blog.basilehenry.com/tags/rust/>rust</a></li>
+<li><a href=https://blog.basilehenry.com/tags/linux/>linux</a></li>
+</ul>
+<div class=share-buttons>
+<a target=_blank rel="noopener noreferrer" aria-label="share Small pv clone in under 75 lines of Rust on twitter" href="https://twitter.com/intent/tweet/?text=Small%20pv%20clone%20in%20under%2075%20lines%20of%20Rust&url=https%3a%2f%2fblog.basilehenry.com%2fblog%2fpv-in-rust%2f&hashtags=rust%2clinux"><svg viewBox="0 0 512 512"><path d="M449.446.0C483.971.0 512 28.03 512 62.554v386.892C512 483.97 483.97 512 449.446 512H62.554c-34.524.0-62.554-28.03-62.554-62.554V62.554c0-34.524 28.029-62.554 62.554-62.554h386.892zM195.519 424.544c135.939.0 210.268-112.643 210.268-210.268.0-3.218.0-6.437-.153-9.502 14.406-10.421 26.973-23.448 36.935-38.314-13.18 5.824-27.433 9.809-42.452 11.648 15.326-9.196 26.973-23.602 32.49-40.92-14.252 8.429-30.038 14.56-46.896 17.931-13.487-14.406-32.644-23.295-53.946-23.295-40.767.0-73.87 33.104-73.87 73.87.0 5.824.613 11.494 1.992 16.858-61.456-3.065-115.862-32.49-152.337-77.241-6.284 10.881-9.962 23.601-9.962 37.088.0 25.594 13.027 48.276 32.95 61.456-12.107-.307-23.448-3.678-33.41-9.196v.92c0 35.862 25.441 65.594 59.311 72.49-6.13 1.686-12.72 2.606-19.464 2.606-4.751.0-9.348-.46-13.946-1.38 9.349 29.426 36.628 50.728 68.965 51.341-25.287 19.771-57.164 31.571-91.8 31.571-5.977.0-11.801-.306-17.625-1.073 32.337 21.15 71.264 33.41 112.95 33.41z"/></svg>
+</a>
+<a target=_blank rel="noopener noreferrer" aria-label="share Small pv clone in under 75 lines of Rust on linkedin" href="https://www.linkedin.com/shareArticle?mini=true&url=https%3a%2f%2fblog.basilehenry.com%2fblog%2fpv-in-rust%2f&title=Small%20pv%20clone%20in%20under%2075%20lines%20of%20Rust&summary=Small%20pv%20clone%20in%20under%2075%20lines%20of%20Rust&source=https%3a%2f%2fblog.basilehenry.com%2fblog%2fpv-in-rust%2f"><svg viewBox="0 0 512 512"><path d="M449.446.0C483.971.0 512 28.03 512 62.554v386.892C512 483.97 483.97 512 449.446 512H62.554c-34.524.0-62.554-28.03-62.554-62.554V62.554c0-34.524 28.029-62.554 62.554-62.554h386.892zM160.461 423.278V197.561h-75.04v225.717h75.04zm270.539.0V293.839c0-69.333-37.018-101.586-86.381-101.586-39.804.0-57.634 21.891-67.617 37.266v-31.958h-75.021c.995 21.181.0 225.717.0 225.717h75.02V297.222c0-6.748.486-13.492 2.474-18.315 5.414-13.475 17.767-27.434 38.494-27.434 27.135.0 38.007 20.707 38.007 51.037v120.768H431zM123.448 88.722C97.774 88.722 81 105.601 81 127.724c0 21.658 16.264 39.002 41.455 39.002h.484c26.165.0 42.452-17.344 42.452-39.002-.485-22.092-16.241-38.954-41.943-39.002z"/></svg>
+</a>
+<a target=_blank rel="noopener noreferrer" aria-label="share Small pv clone in under 75 lines of Rust on reddit" href="https://reddit.com/submit?url=https%3a%2f%2fblog.basilehenry.com%2fblog%2fpv-in-rust%2f&title=Small%20pv%20clone%20in%20under%2075%20lines%20of%20Rust"><svg viewBox="0 0 512 512"><path d="M449.446.0C483.971.0 512 28.03 512 62.554v386.892C512 483.97 483.97 512 449.446 512H62.554c-34.524.0-62.554-28.03-62.554-62.554V62.554c0-34.524 28.029-62.554 62.554-62.554h386.892zM446 265.638c0-22.964-18.616-41.58-41.58-41.58-11.211.0-21.361 4.457-28.841 11.666-28.424-20.508-67.586-33.757-111.204-35.278l18.941-89.121 61.884 13.157c.756 15.734 13.642 28.29 29.56 28.29 16.407.0 29.706-13.299 29.706-29.701.0-16.403-13.299-29.702-29.706-29.702-11.666.0-21.657 6.792-26.515 16.578l-69.105-14.69c-1.922-.418-3.939-.042-5.585 1.036-1.658 1.073-2.811 2.761-3.224 4.686l-21.152 99.438c-44.258 1.228-84.046 14.494-112.837 35.232-7.468-7.164-17.589-11.591-28.757-11.591-22.965.0-41.585 18.616-41.585 41.58.0 16.896 10.095 31.41 24.568 37.918-.639 4.135-.99 8.328-.99 12.576.0 63.977 74.469 115.836 166.33 115.836s166.334-51.859 166.334-115.836c0-4.218-.347-8.387-.977-12.493 14.564-6.47 24.735-21.034 24.735-38.001zM326.526 373.831c-20.27 20.241-59.115 21.816-70.534 21.816-11.428.0-50.277-1.575-70.522-21.82-3.007-3.008-3.007-7.882.0-10.889 3.003-2.999 7.882-3.003 10.885.0 12.777 12.781 40.11 17.317 59.637 17.317 19.522.0 46.86-4.536 59.657-17.321 3.016-2.999 7.886-2.995 10.885.008 3.008 3.011 3.003 7.882-.008 10.889zm-5.23-48.781c-16.373.0-29.701-13.324-29.701-29.698.0-16.381 13.328-29.714 29.701-29.714 16.378.0 29.706 13.333 29.706 29.714.0 16.374-13.328 29.698-29.706 29.698zM160.91 295.348c0-16.381 13.328-29.71 29.714-29.71 16.369.0 29.689 13.329 29.689 29.71.0 16.373-13.32 29.693-29.689 29.693-16.386.0-29.714-13.32-29.714-29.693z"/></svg>
+</a>
+<a target=_blank rel="noopener noreferrer" aria-label="share Small pv clone in under 75 lines of Rust on facebook" href="https://facebook.com/sharer/sharer.php?u=https%3a%2f%2fblog.basilehenry.com%2fblog%2fpv-in-rust%2f"><svg viewBox="0 0 512 512"><path d="M449.446.0C483.971.0 512 28.03 512 62.554v386.892C512 483.97 483.97 512 449.446 512H342.978V319.085h66.6l12.672-82.621h-79.272v-53.617c0-22.603 11.073-44.636 46.58-44.636H425.6v-70.34s-32.71-5.582-63.982-5.582c-65.288.0-107.96 39.569-107.96 111.204v62.971h-72.573v82.621h72.573V512h-191.104c-34.524.0-62.554-28.03-62.554-62.554V62.554c0-34.524 28.029-62.554 62.554-62.554h386.892z"/></svg>
+</a>
+<a target=_blank rel="noopener noreferrer" aria-label="share Small pv clone in under 75 lines of Rust on whatsapp" href="https://api.whatsapp.com/send?text=Small%20pv%20clone%20in%20under%2075%20lines%20of%20Rust%20-%20https%3a%2f%2fblog.basilehenry.com%2fblog%2fpv-in-rust%2f"><svg viewBox="0 0 512 512"><path d="M449.446.0C483.971.0 512 28.03 512 62.554v386.892C512 483.97 483.97 512 449.446 512H62.554c-34.524.0-62.554-28.03-62.554-62.554V62.554c0-34.524 28.029-62.554 62.554-62.554h386.892zm-58.673 127.703c-33.842-33.881-78.847-52.548-126.798-52.568-98.799.0-179.21 80.405-179.249 179.234-.013 31.593 8.241 62.428 23.927 89.612l-25.429 92.884 95.021-24.925c26.181 14.28 55.659 21.807 85.658 21.816h.074c98.789.0 179.206-80.413 179.247-179.243.018-47.895-18.61-92.93-52.451-126.81zM263.976 403.485h-.06c-26.734-.01-52.954-7.193-75.828-20.767l-5.441-3.229-56.386 14.792 15.05-54.977-3.542-5.637c-14.913-23.72-22.791-51.136-22.779-79.287.033-82.142 66.867-148.971 149.046-148.971 39.793.014 77.199 15.531 105.329 43.692 28.128 28.16 43.609 65.592 43.594 105.4-.034 82.149-66.866 148.983-148.983 148.984zm81.721-111.581c-4.479-2.242-26.499-13.075-30.604-14.571-4.105-1.495-7.091-2.241-10.077 2.241-2.986 4.483-11.569 14.572-14.182 17.562-2.612 2.988-5.225 3.364-9.703 1.12-4.479-2.241-18.91-6.97-36.017-22.23C231.8 264.15 222.81 249.484 220.198 245s-.279-6.908 1.963-9.14c2.016-2.007 4.48-5.232 6.719-7.847 2.24-2.615 2.986-4.484 4.479-7.472 1.493-2.99.747-5.604-.374-7.846-1.119-2.241-10.077-24.288-13.809-33.256-3.635-8.733-7.327-7.55-10.077-7.688-2.609-.13-5.598-.158-8.583-.158-2.986.0-7.839 1.121-11.944 5.604-4.105 4.484-15.675 15.32-15.675 37.364.0 22.046 16.048 43.342 18.287 46.332 2.24 2.99 31.582 48.227 76.511 67.627 10.685 4.615 19.028 7.371 25.533 9.434 10.728 3.41 20.492 2.929 28.209 1.775 8.605-1.285 26.499-10.833 30.231-21.295 3.732-10.464 3.732-19.431 2.612-21.298-1.119-1.869-4.105-2.99-8.583-5.232z"/></svg>
+</a>
+<a target=_blank rel="noopener noreferrer" aria-label="share Small pv clone in under 75 lines of Rust on telegram" href="https://telegram.me/share/url?text=Small%20pv%20clone%20in%20under%2075%20lines%20of%20Rust&url=https%3a%2f%2fblog.basilehenry.com%2fblog%2fpv-in-rust%2f"><svg viewBox="2 2 28 28"><path d="M26.49 29.86H5.5a3.37 3.37.0 01-2.47-1 3.35 3.35.0 01-1-2.47V5.48A3.36 3.36.0 013 3 3.37 3.37.0 015.5 2h21A3.38 3.38.0 0129 3a3.36 3.36.0 011 2.46V26.37a3.35 3.35.0 01-1 2.47 3.38 3.38.0 01-2.51 1.02zm-5.38-6.71a.79.79.0 00.85-.66L24.73 9.24a.55.55.0 00-.18-.46.62.62.0 00-.41-.17q-.08.0-16.53 6.11a.59.59.0 00-.41.59.57.57.0 00.43.52l4 1.24 1.61 4.83a.62.62.0 00.63.43.56.56.0 00.4-.17L16.54 20l4.09 3A.9.9.0 0021.11 23.15zM13.8 20.71l-1.21-4q8.72-5.55 8.78-5.55c.15.0.23.0.23.16a.18.18.0 010 .06s-2.51 2.3-7.52 6.8z"/></svg>
+</a>
+</div>
+</footer>
+</article>
+</main>
+<footer class=footer>
+<span>&copy; 2021 <a href=https://blog.basilehenry.com/>Basile's blog</a></span>
+<span>
+Powered by
+<a href=https://gohugo.io/ rel="noopener noreferrer" target=_blank>Hugo</a> &
+        <a href=https://git.io/hugopapermod rel=noopener target=_blank>PaperMod</a>
+</span>
+</footer>
+<a href=#top aria-label="go to top" title="Go to Top (Alt + G)" class=top-link id=top-link accesskey=g><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentcolor"><path d="M12 6H0l6-6z"/></svg>
+</a>
+<script>let menu=document.getElementById('menu');menu.scrollLeft=localStorage.getItem("menu-scroll-position"),menu.onscroll=function(){localStorage.setItem("menu-scroll-position",menu.scrollLeft)},document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener("click",function(b){b.preventDefault();var a=this.getAttribute("href").substr(1);window.matchMedia('(prefers-reduced-motion: reduce)').matches?document.querySelector(`[id='${decodeURIComponent(a)}']`).scrollIntoView():document.querySelector(`[id='${decodeURIComponent(a)}']`).scrollIntoView({behavior:"smooth"}),a==="top"?history.replaceState(null,null," "):history.pushState(null,null,`#${a}`)})})</script>
+<script>var mybutton=document.getElementById("top-link");window.onscroll=function(){document.body.scrollTop>800||document.documentElement.scrollTop>800?(mybutton.style.visibility="visible",mybutton.style.opacity="1"):(mybutton.style.visibility="hidden",mybutton.style.opacity="0")}</script>
+<script>document.getElementById("theme-toggle").addEventListener("click",()=>{document.body.className.includes("dark")?(document.body.classList.remove('dark'),localStorage.setItem("pref-theme",'light')):(document.body.classList.add('dark'),localStorage.setItem("pref-theme",'dark'))})</script>
+</body>
+</html>

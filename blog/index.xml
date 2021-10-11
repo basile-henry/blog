@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
   <channel>
-    <title>Basile&#39;s blog</title>
-    <link>https://blog.basilehenry.com/</link>
-    <description>Recent content on Basile&#39;s blog</description>
+    <title>Blogs on Basile&#39;s blog</title>
+    <link>https://blog.basilehenry.com/blog/</link>
+    <description>Recent content in Blogs on Basile&#39;s blog</description>
     <generator>Hugo -- gohugo.io</generator>
     <language>en-us</language>
-    <lastBuildDate>Sun, 10 Oct 2021 17:44:31 +0200</lastBuildDate><atom:link href="https://blog.basilehenry.com/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sun, 10 Oct 2021 17:44:31 +0200</lastBuildDate><atom:link href="https://blog.basilehenry.com/blog/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>Small pv clone in under 75 lines of Rust</title>
       <link>https://blog.basilehenry.com/blog/pv-in-rust/</link>
