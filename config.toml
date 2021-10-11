@@ -31,6 +31,6 @@ minifyOutput = true
   font_code = "Source Code Pro"
 
 [params.editPost]
-URL = "https://github.com/basile-henry/blog/content"
+URL = "https://github.com/basile-henry/blog/edit/main/content"
 Text = "Suggest Changes"
 appendFilePath = true
